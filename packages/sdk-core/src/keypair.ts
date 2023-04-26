@@ -5,9 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // This file has been modified by Webb Technologies Inc.
 
+import { decrypt, encrypt, getEncryptionPublicKey } from '@metamask/eth-sig-util';
 import { poseidon } from 'circomlibjs';
-import { decrypt, encrypt, getEncryptionPublicKey } from 'eth-sig-util';
-import { BigNumber, ethers } from 'ethers';
+import { ethers } from 'ethers';
 
 import { FIELD_SIZE, randomBN, toFixedHex } from './big-number-utils.js';
 
@@ -59,7 +59,7 @@ export function unpackEncryptedMessage (encryptedMessage: any) {
  */
 export class Keypair {
   privkey: string | undefined; // stored as a hex-encoded 0x-prefixed 32 byte string
-  private pubkey: ethers.BigNumber;
+  private pubkey: ethers.BigNumberish;
   private encryptionKey: string | undefined; // stored as a base64 encryption key
 
   /**
@@ -68,9 +68,9 @@ export class Keypair {
    * @param privkey - hex string of a field element for the
    * @returns - A 'Keypair' object with pubkey and encryptionKey values derived from the private key.
    */
-  constructor (privkey = randomBN(32).toHexString()) {
-    this.privkey = toFixedHex(BigNumber.from(privkey).mod(FIELD_SIZE));
-    this.pubkey = BigNumber.from(poseidon([this.privkey]));
+  constructor (privkey = `0x${randomBN(32).toString(16)}`) {
+    this.privkey = toFixedHex(BigInt(privkey) % BigInt(FIELD_SIZE));
+    this.pubkey = BigInt(poseidon([this.privkey]));
     this.encryptionKey = getEncryptionPublicKey(this.privkey.slice(2));
   }
 
@@ -102,13 +102,13 @@ export class Keypair {
       return Object.assign(new Keypair(), {
         encryptionKey: undefined,
         privkey: undefined,
-        pubkey: BigNumber.from(str)
+        pubkey: BigInt(str)
       });
     } else if (str.length === 130) {
       return Object.assign(new Keypair(), {
         encryptionKey: Buffer.from(str.slice(66, 130), 'hex').toString('base64'),
         privkey: undefined,
-        pubkey: BigNumber.from(str.slice(0, 66))
+        pubkey: BigInt(str.slice(0, 66))
       });
     } else {
       throw new Error('Invalid string passed');
@@ -121,7 +121,11 @@ export class Keypair {
     const base64Key = Buffer.from(encryptionKey.slice(2), 'hex').toString('base64');
 
     return packEncryptedMessage(
-      encrypt(base64Key, { data }, 'x25519-xsalsa20-poly1305')
+      encrypt({
+        data,
+        publicKey: base64Key,
+        version: 'x25519-xsalsa20-poly1305'
+      })
     );
   }
 
@@ -137,7 +141,11 @@ export class Keypair {
     }
 
     return packEncryptedMessage(
-      encrypt(this.encryptionKey, { data: bytes.toString('base64') }, 'x25519-xsalsa20-poly1305')
+      encrypt({
+        data: bytes.toString('base64'),
+        publicKey: this.encryptionKey,
+        version: 'x25519-xsalsa20-poly1305'
+      })
     );
   }
 
@@ -152,14 +160,17 @@ export class Keypair {
       throw new Error('Cannot decrypt without a configured private key');
     }
 
-    return Buffer.from(decrypt(unpackEncryptedMessage(data), this.privkey.slice(2)), 'base64');
+    return Buffer.from(decrypt({
+      encryptedData: unpackEncryptedMessage(data),
+      privateKey: this.privkey.slice(2)
+    }), 'base64');
   }
 
   /**
    * @returns a 0x-prefixed, 32 fixed byte hex-string representation of the public key
    */
   getPubKey () {
-    return toFixedHex(this.pubkey.toHexString());
+    return toFixedHex(`0x${this.pubkey.toString(16)}`);
   }
 
   /**
